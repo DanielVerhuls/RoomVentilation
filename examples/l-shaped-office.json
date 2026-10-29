@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "l-shaped-office",
+  "room": {
+    "vertices": [[0, 0], [6, 0], [6, 2.5], [3.3, 2.5], [3.3, 4], [0, 4]],
+    "height": 2.7
+  },
+  "conditions": {
+    "initial_temperature": 21,
+    "initial_co2_ppm": 600,
+    "outdoor_temperature": 10,
+    "outdoor_co2_ppm": 420
+  },
+  "openings": [
+    { "id": "window-1", "kind": "window", "wall": 0, "offset": 2.0, "width": 1.2, "bc": "inlet", "velocity": 0.5 },
+    { "id": "window-2", "kind": "window", "wall": 1, "offset": 0.6, "width": 1.0, "bc": "closed", "velocity": 0.5 },
+    { "id": "door-1", "kind": "door", "wall": 4, "offset": 0.5, "width": 0.9, "bc": "outlet", "velocity": 0.5 }
+  ],
+  "people": [
+    { "id": "person-1", "x": 1.5, "y": 1.5, "radius": 0.25, "activity": "seated", "co2_lps": 0.005, "heat_w": 100 },
+    { "id": "person-2", "x": 4.5, "y": 1.2, "radius": 0.25, "activity": "standing", "co2_lps": 0.0065, "heat_w": 130 }
+  ]
+}

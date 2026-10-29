@@ -1,0 +1,33 @@
+# Run everything:   docker compose up --build
+# Then open:        http://localhost:8080
+name: roomventilation
+
+services:
+  api:
+    build: ./services/api
+    image: roomventilation/api:dev
+    volumes:
+      - layouts:/data # named volume: layouts survive container rebuilds
+
+  solver:
+    build: ./services/solver
+    image: roomventilation/solver:dev
+    environment:
+      API_URL: http://api:8000 # "api" is the service name, resolved by Docker's DNS
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build: ./services/web
+    image: roomventilation/web:dev
+    ports:
+      - "8080:80" # host:container - the only port published to your machine
+    depends_on:
+      api:
+        condition: service_healthy
+      solver:
+        condition: service_healthy
+
+volumes:
+  layouts:

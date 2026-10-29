@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Airflow View</title>
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <strong class="brand">RoomVentilation</strong>
+      <a class="button" href="index.html">← Editor</a>
+      <div class="group">
+        <select id="layout-source" title="Which layout to simulate">
+          <option value="">Layout from editor</option>
+        </select>
+        <button id="btn-start" class="primary">Restart</button>
+        <button id="btn-pause">Pause</button>
+        <button id="btn-reset" title="Back to t = 0 (air at rest)">Reset</button>
+      </div>
+      <label class="inline">Speed
+        <select id="speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1× (real time)</option>
+          <option value="2">2×</option>
+          <option value="5">5×</option>
+          <option value="10">10×</option>
+          <option value="0">max</option>
+        </select>
+      </label>
+      <span id="conn-status" class="pill">connecting…</span>
+    </header>
+
+    <main class="workspace viewer">
+      <section class="stage" id="stage">
+        <canvas id="field"></canvas>
+        <canvas id="particles"></canvas>
+        <div id="overlay-msg" class="overlay-msg" hidden></div>
+      </section>
+
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Display</h2>
+          <div class="segmented" id="background">
+            <label><input type="radio" name="bg" value="speed" checked /> Velocity</label>
+            <label><input type="radio" name="bg" value="pressure" /> Pressure</label>
+            <label><input type="radio" name="bg" value="none" /> None</label>
+          </div>
+          <div class="colorbar">
+            <div id="colorbar-gradient" class="gradient"></div>
+            <div class="ticks"><span id="cb-min"></span><span id="cb-label"></span><span id="cb-max"></span></div>
+          </div>
+          <label class="check"><input id="show-particles" type="checkbox" checked /> Particles (flow lines)</label>
+          <label class="check"><input id="show-streamlines" type="checkbox" /> Streamlines</label>
+          <label class="check"><input id="show-vectors" type="checkbox" /> Velocity vectors</label>
+        </section>
+
+        <section class="card">
+          <h2>Simulation</h2>
+          <label class="field">
+            <span>Cell size</span>
+            <select id="dx">
+              <option value="0.1">0.10 m</option>
+              <option value="0.05" selected>0.05 m</option>
+              <option value="0.025">0.025 m</option>
+            </select>
+            <small></small>
+          </label>
+          <label class="field">
+            <span>Effective viscosity</span>
+            <select id="nu">
+              <option value="0.000015">1.5e-5 (air)</option>
+              <option value="0.0005">5e-4</option>
+              <option value="0.002" selected>2e-3</option>
+              <option value="0.01">1e-2</option>
+              <option value="0.05">5e-2</option>
+            </select>
+            <small>m²/s</small>
+          </label>
+          <dl id="stats" class="stats"></dl>
+        </section>
+
+        <section class="card">
+          <h2>Probe</h2>
+          <p id="probe" class="info">Hover over the room.</p>
+        </section>
+
+        <section class="card">
+          <h2>Things to try</h2>
+          <ul class="tips">
+            <li><b>max |div u|</b> is mass conservation after the pressure projection; it should stay near 1e-14.</li>
+            <li>Lower the viscosity: the inlet jet starts to flap and shed vortices. At the real value for air, what you see is mostly the scheme's own numerical diffusion.</li>
+            <li>Compare cell sizes 0.1 and 0.025: the finer grid resolves sharper jets but runs slower.</li>
+            <li>Pressure: the jet hitting a wall builds up pressure (stagnation), vortex cores are low-pressure spots, and the outlet is the 0 Pa reference.</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="js/viewer.js"></script>
+  </body>
+</html>

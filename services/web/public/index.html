@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Room Layout Editor</title>
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <strong class="brand">RoomVentilation</strong>
+      <div class="group">
+        <button id="btn-new" title="New default layout">New</button>
+        <select id="server-list" title="Layouts saved on the server"><option value="">Server layouts…</option></select>
+        <button id="btn-load">Load</button>
+        <button id="btn-save" title="Save to server under the layout name">Save</button>
+        <button id="btn-delete" title="Delete selected server layout">Delete</button>
+      </div>
+      <div class="group">
+        <button id="btn-import">Import JSON</button>
+        <button id="btn-export">Export JSON</button>
+        <input id="file-input" type="file" accept=".json,application/json" hidden />
+      </div>
+      <div class="group">
+        <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
+      </div>
+      <a class="button primary" href="simulate.html" title="Run the airflow simulation for this layout">Simulate ▶</a>
+      <span id="api-status" class="pill">API …</span>
+    </header>
+
+    <main class="workspace">
+      <nav id="tools" class="tools" aria-label="Tools"></nav>
+
+      <section class="stage">
+        <canvas id="canvas"></canvas>
+        <div class="stage-controls">
+          <button id="btn-zoom-in" title="Zoom in">+</button>
+          <button id="btn-zoom-out" title="Zoom out">−</button>
+          <button id="btn-fit" title="Fit room (F)">Fit</button>
+        </div>
+        <div id="tool-hint" class="tool-hint"></div>
+      </section>
+
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Properties</h2>
+          <div id="panel"></div>
+        </section>
+        <section class="card">
+          <h2>Mesh preview</h2>
+          <label class="field">
+            <span>Show mesh</span>
+            <input id="mesh-toggle" type="checkbox" />
+          </label>
+          <label class="field">
+            <span>Cell size</span>
+            <select id="mesh-dx">
+              <option value="0.2">0.20 m</option>
+              <option value="0.1" selected>0.10 m</option>
+              <option value="0.05">0.05 m</option>
+              <option value="0.025">0.025 m</option>
+            </select>
+          </label>
+          <p id="mesh-info" class="info"></p>
+          <ul class="legend">
+            <li><i style="background: var(--solid-cell)"></i>solid</li>
+            <li><i style="background: var(--inlet)"></i>inlet</li>
+            <li><i style="background: var(--outlet)"></i>outlet</li>
+            <li><i style="background: var(--window)"></i>closed opening</li>
+            <li><i style="background: var(--heat)"></i>heat / CO₂ source</li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Checks</h2>
+          <ul id="issues" class="issues"></ul>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="cursor-pos">–</span>
+      <label>Snap
+        <select id="snap">
+          <option value="0">off</option>
+          <option value="0.05">5 cm</option>
+          <option value="0.1" selected>10 cm</option>
+          <option value="0.25">25 cm</option>
+          <option value="0.5">50 cm</option>
+        </select>
+      </label>
+      <span class="muted">Alt = no snap · Space/right-drag = pan · wheel = zoom · Del = delete</span>
+      <span id="message" class="message"></span>
+    </footer>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
