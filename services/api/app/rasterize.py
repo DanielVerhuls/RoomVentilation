@@ -6,6 +6,11 @@ centre lies inside the room polygon ("staircase" / cut-cell-free immersed
 boundary). Walls that are not grid-aligned therefore become jagged - a classic
 trade-off you can see directly in the editor's mesh preview.
 
+Openings and ventilation units become BOUNDARY cells (the solid cells just
+outside the wall). Which boundary condition they get is decided by the solver
+from `boundaries[boundary_id]`, so doors can be opened and closed while the
+simulation runs without re-meshing.
+
 Arrays are indexed [j, i] = [y, x], j = 0 is the bottom row.
 """
 
@@ -17,12 +22,12 @@ import numpy as np
 from . import geometry as geo
 from .models import Layout
 
-SOLID, FLUID, INLET, OUTLET, CLOSED_OPENING = 0, 1, 2, 3, 4
-CELL_TYPE_NAMES = {SOLID: "solid", FLUID: "fluid", INLET: "inlet", OUTLET: "outlet", CLOSED_OPENING: "closed_opening"}
-_BC_TO_TYPE = {"inlet": INLET, "outlet": OUTLET, "closed": CLOSED_OPENING}
+SOLID, FLUID, BOUNDARY = 0, 1, 2
+CELL_TYPE_NAMES = {SOLID: "solid", FLUID: "fluid", BOUNDARY: "boundary"}
 
 MAX_CELLS = 1_000_000
 PAD = 2  # solid cells around the bounding box, so every wall has an "outside" cell
+HOB_PLUME_RADIUS = 1.0  # m, area over which a hob's emissions enter the (depth-averaged) room air
 
 
 @dataclass
@@ -32,10 +37,11 @@ class Grid:
     dx: float
     origin: tuple[float, float]  # world position of the lower-left corner of cell [0, 0]
     cell_type: np.ndarray  # uint8 [ny, nx]
-    boundary_id: np.ndarray  # int16 [ny, nx], index into layout.openings or -1
+    boundary_id: np.ndarray  # int16 [ny, nx], index into `boundaries` or -1
     heat_source: np.ndarray  # float [ny, nx], W per cell
     co2_source: np.ndarray  # float [ny, nx], L/s per cell
     boundaries: list[dict] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)  # passed through to the solver
 
     def cell_centers(self) -> tuple[np.ndarray, np.ndarray]:
         xs = self.origin[0] + (np.arange(self.nx) + 0.5) * self.dx
@@ -55,6 +61,7 @@ class Grid:
             "heat_source": np.round(self.heat_source, 6).ravel().tolist(),
             "co2_source": np.round(self.co2_source, 9).ravel().tolist(),
             "boundaries": self.boundaries,
+            **self.extra,
             "stats": {
                 "fluid_cells": int(np.count_nonzero(self.cell_type == FLUID)),
                 "total_cells": self.nx * self.ny,
@@ -93,8 +100,18 @@ def rasterize(layout: Layout, dx: float) -> Grid:
     v = layout.room.vertices
     grid.cell_type[geo.points_in_polygon(cx, cy, v)] = FLUID
 
-    _mark_openings(grid, layout)
-    _add_people(grid, layout, cx, cy)
+    _mark_wall_items(grid, layout)
+    sources = _add_sources(grid, layout, cx, cy)
+    grid.extra = {
+        "room_height": layout.room.height,
+        "conditions": layout.conditions.model_dump(),
+        "fans": [f.model_dump() for f in layout.fans],
+        "sources": sources,
+        "extracts": [
+            {**e.model_dump(), "cells": _rect_cells(grid, cx, cy, e.x, e.y, e.width, e.depth).tolist()}
+            for e in layout.extracts
+        ],
+    }
     return grid
 
 
@@ -114,17 +131,18 @@ def _touches_fluid(grid: Grid, i: int, j: int) -> bool:
     return False
 
 
-def _mark_openings(grid: Grid, layout: Layout) -> None:
-    """Openings become boundary cells: the solid cells just outside the wall."""
+def _mark_wall_items(grid: Grid, layout: Layout) -> None:
+    """Openings and vents become boundary cells: the solid cells just outside the wall."""
     v = layout.room.vertices
-    for k, op in enumerate(layout.openings):
-        if op.wall >= len(v):
+    items = [("opening", op) for op in layout.openings] + [("vent", vent) for vent in layout.vents]
+    for kind, item in items:
+        if item.wall >= len(v):
             continue
-        (ax, ay), (tx, ty), (nx_, ny_) = geo.wall_frame(v, op.wall)
-        cell_type = _BC_TO_TYPE[op.bc]
+        k = len(grid.boundaries)
+        (ax, ay), (tx, ty), (nx_, ny_) = geo.wall_frame(v, item.wall)
         marked = 0
-        steps = max(2, math.ceil(op.width / (grid.dx / 4)))
-        for s in np.linspace(op.offset, op.offset + op.width, steps + 1)[1:-1]:
+        steps = max(2, math.ceil(item.width / (grid.dx / 4)))
+        for s in np.linspace(item.offset, item.offset + item.width, steps + 1)[1:-1]:
             px, py = ax + tx * s, ay + ty * s
             # Step outward until we hit a solid cell that borders the fluid.
             for depth in (0.5, 1.0, 1.5):
@@ -134,43 +152,85 @@ def _mark_openings(grid: Grid, layout: Layout) -> None:
                 i, j = idx
                 if grid.cell_type[j, i] == FLUID:
                     continue
-                if _touches_fluid(grid, i, j):
-                    if grid.boundary_id[j, i] != k:
-                        marked += 1
-                    grid.cell_type[j, i] = cell_type
+                if grid.boundary_id[j, i] < 0 and _touches_fluid(grid, i, j):
+                    grid.cell_type[j, i] = BOUNDARY
                     grid.boundary_id[j, i] = k
+                    marked += 1
                 break
-        grid.boundaries.append(
-            {
-                "index": k,
-                "id": op.id,
-                "kind": op.kind,
-                "bc": op.bc,
-                "cells": marked,
-                # Velocity of air entering the room (inward normal * speed).
-                "inflow_velocity": [-nx_ * op.velocity, -ny_ * op.velocity] if op.bc == "inlet" else [0.0, 0.0],
-                "temperature": layout.conditions.outdoor_temperature,
-                "co2_ppm": layout.conditions.outdoor_co2_ppm,
-            }
-        )
+        info = {
+            "index": k,
+            "id": item.id,
+            "type": kind,
+            "kind": item.kind if kind == "opening" else "vent",
+            "width": item.width,
+            "outward_normal": [nx_, ny_],
+            "cells": marked,
+        }
+        if kind == "opening":
+            height = item.height or (2.0 if item.kind == "door" else 1.2)
+            undercut = item.undercut if item.undercut is not None else (0.01 if item.kind == "door" else 0.0)
+            info.update(
+                open=item.open, connects_to=item.connects_to, height=min(height, layout.room.height), undercut=undercut
+            )
+        else:
+            info.update(mode=item.mode, flow_m3h=item.flow_m3h, supply_temperature=item.supply_temperature, on=item.on)
+        grid.boundaries.append(info)
 
 
-def _add_people(grid: Grid, layout: Layout, cx: np.ndarray, cy: np.ndarray) -> None:
-    """Spread each person's heat and CO2 evenly over the fluid cells they cover.
+def _fallback_cell(grid: Grid, x: float, y: float, mask: np.ndarray) -> np.ndarray:
+    """Something smaller than a cell: use the cell containing its centre."""
+    idx = _cell_index(grid, x, y)
+    if idx is not None and grid.cell_type[idx[1], idx[0]] == FLUID:
+        mask = np.zeros_like(mask)
+        mask[idx[1], idx[0]] = True
+    return mask
 
-    Modelling choice: in this top view a person is a source region, not an
-    obstacle (think of the slice at breathing height). Making them solid is an
-    easy experiment for later.
+
+def _in_rect(cx, cy, x, y, width, depth):
+    """Half-open [x0, x1) x [y0, y1), so a rectangle on cell edges covers exactly width / dx cells."""
+    eps = 1e-9
+    return (cx >= x - width / 2 - eps) & (cx < x + width / 2 - eps) & (cy >= y - depth / 2 - eps) & (cy < y + depth / 2 - eps)
+
+
+def _rect_cells(grid: Grid, cx, cy, x, y, width, depth) -> np.ndarray:
+    """Flat indices of the fluid cells whose centres lie in an axis-aligned rectangle."""
+    mask = _in_rect(cx, cy, x, y, width, depth) & (grid.cell_type == FLUID)
+    if not mask.any():
+        mask = _fallback_cell(grid, x, y, mask)
+    return np.flatnonzero(mask)
+
+
+def _add_sources(grid: Grid, layout: Layout, cx: np.ndarray, cy: np.ndarray) -> list[dict]:
+    """Everything that emits heat, CO2, vapour or fumes, with the fluid cells it covers.
+
+    The solver gets the list (so showers and hobs can be switched while it runs); the
+    summed heat/CO2 arrays are kept for the editor's mesh preview.
+
+    Modelling choice: in this top view a person is a source region, not an obstacle
+    (think of the slice at breathing height).
     """
+    sources = []
     for p in layout.people:
-        footprint = ((cx - p.x) ** 2 + (cy - p.y) ** 2 <= p.radius**2) & (grid.cell_type == FLUID)
-        if not footprint.any():
-            # Person smaller than a cell: put everything into the cell containing the centre.
-            idx = _cell_index(grid, p.x, p.y)
-            if idx is None or grid.cell_type[idx[1], idx[0]] != FLUID:
-                continue
-            footprint = np.zeros_like(footprint)
-            footprint[idx[1], idx[0]] = True
-        n = np.count_nonzero(footprint)
-        grid.heat_source[footprint] += p.heat_w / n
-        grid.co2_source[footprint] += p.co2_lps / n
+        mask = ((cx - p.x) ** 2 + (cy - p.y) ** 2 <= p.radius**2) & (grid.cell_type == FLUID)
+        if not mask.any():
+            mask = _fallback_cell(grid, p.x, p.y, mask)
+        cells = np.flatnonzero(mask)
+        sources.append({"id": p.id, "type": "person", "x": p.x, "y": p.y, "cells": cells.tolist(), "heat_w": p.heat_w,
+                        "co2_lps": p.co2_lps, "moisture_gph": p.moisture_gph, "on": True})  # fmt: skip
+    for shower in layout.showers:
+        cells = _rect_cells(grid, cx, cy, shower.x, shower.y, shower.width, shower.depth)
+        sources.append({**shower.model_dump(), "type": "shower", "cells": cells.tolist()})
+    for hob in layout.hobs:
+        # A hob's hot plume rises and spreads under the ceiling - vertical transport a top view
+        # does not have. Releasing its emissions over a disk around it stands in for that spreading;
+        # in the hob's own few cells 2 kW would heat the air to absurd temperatures.
+        mask = ((cx - hob.x) ** 2 + (cy - hob.y) ** 2 <= HOB_PLUME_RADIUS**2) & (grid.cell_type == FLUID)
+        if not mask.any():
+            mask = _fallback_cell(grid, hob.x, hob.y, mask)
+        sources.append({**hob.model_dump(), "type": "hob", "cells": np.flatnonzero(mask).tolist()})
+    for s in sources:
+        n = len(s["cells"])
+        if n:
+            grid.heat_source.ravel()[s["cells"]] += s.get("heat_w", 0.0) / n
+            grid.co2_source.ravel()[s["cells"]] += s.get("co2_lps", 0.0) / n
+    return sources

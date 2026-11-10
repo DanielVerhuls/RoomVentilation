@@ -57,12 +57,36 @@ you can then scale or pin it separately (e.g. solver on the fast PC, web/api on 
 - Viewer in `web`: velocity / pressure background, particles, streamlines, vectors, probe.
 - **Learn:** WebSockets, binary protocols, decoupling sim time from render time.
 
-### 5. Temperature & CO₂
-- Two passive scalars (advection–diffusion with sources from people). In a top view
-  buoyancy acts *perpendicular* to the plane, so it cannot drive the 2D flow - worth
-  understanding why, and a good argument for a vertical-slice or 3D mode later.
-- Effective (turbulent) diffusivity instead of molecular diffusivity.
-- **Learn:** scalar transport, Péclet number, upwind vs. central schemes, conservation checks.
+### ✅ 5. Temperature, CO₂, and a realistic boundary model
+- Two passive scalars (conservative upwind finite volumes, sub-stepped for stability) with
+  sources from people. In a top view buoyancy acts *perpendicular* to the plane, so it
+  cannot drive the 2D flow; that is a good argument for a vertical-slice or 3D mode later.
+- Effective (turbulent) diffusivity = effective viscosity (turbulent Prandtl/Schmidt = 1).
+- Boundary conditions redesigned:
+  - Doors and windows are pressure openings (wind Cp model + orifice loss).
+  - Ventilation units are fixed-flow boundaries.
+  - Fans are momentum sources.
+  - Everything can be switched live; the pressure matrix is re-factorized on demand.
+- Tests:
+  - Exact heat and CO₂ conservation in a closed room.
+  - The well-mixed steady state at the exhaust (C = C_in + G/Q).
+  - Cross-ventilation against the orifice equation.
+- **Learn:** scalar transport, Péclet number, upwind vs. central schemes, conservation checks,
+  Dirichlet vs. Neumann vs. source terms, well-posedness of incompressible BCs.
+
+### ✅ 5b. Humidity, bathrooms and kitchens
+- Water vapour (g/m³) as a scalar, with relative humidity from the Magnus formula. Vapour
+  condenses on surfaces below the dew point and in the air above saturation; the latent
+  heat is accounted for.
+- Floor, ceiling and walls as heat stores at room temperature (h ≈ 3 W/m²K, Lewis
+  analogy for vapour).
+- Showers, hobs (pasta / fried potatoes), cooking fumes (PM2.5).
+- Extract fans and hoods as volume sinks, with a capture-efficiency model for hoods.
+- Implicit (Robin) boundary condition for openings with a flow resistance, so a 1 cm door
+  gap can feed a bathroom fan; checked against the orifice equation.
+- **Learn:** psychrometrics (dew point, condensation), Robin boundary conditions,
+  explicit-vs-implicit stability, source/sink terms in the continuity equation, where a
+  2D model needs an engineering sub-model (hood capture, plume spreading).
 
 ### 6. Kubernetes
 - Local cluster with **k3d** or **kind** on Docker Desktop: Deployments, Services, an
@@ -72,6 +96,10 @@ you can then scale or pin it separately (e.g. solver on the fast PC, web/api on 
 - **Learn:** declarative deployment, scheduling, node selectors, rolling updates.
 
 ### 7. Extensions
-- Furniture as solid obstacles (schema v2), mechanical ventilation units, heaters.
+- Furniture as solid obstacles (schema v3), heaters / radiators.
+- Heat loss through outer walls and windows to the outside (U-values), and a wall
+  temperature that changes over time (thermal mass), plus wet surfaces drying out again.
+- A vertical-slice mode, so plumes from hobs and showers can actually rise.
+- Fan curves (flow depends on back-pressure) instead of a fixed flow for ventilation units.
 - Numba / multigrid pressure solver for speed; GPU (CuPy) as an experiment.
 - Vertical-slice mode for buoyancy-driven flow.

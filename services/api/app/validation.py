@@ -48,41 +48,86 @@ def validate_layout(layout: Layout) -> list[Issue]:
 
     # --- ids ----------------------------------------------------------------
     seen: set[str] = set()
-    for kind, items in (("openings", layout.openings), ("people", layout.people)):
+    groups = (
+        ("openings", layout.openings),
+        ("vents", layout.vents),
+        ("fans", layout.fans),
+        ("showers", layout.showers),
+        ("hobs", layout.hobs),
+        ("extracts", layout.extracts),
+        ("people", layout.people),
+    )
+    for kind, items in groups:
         for k, item in enumerate(items):
             if item.id in seen:
                 err(f"{kind}[{k}].id", f"Duplicate id '{item.id}'.")
             seen.add(item.id)
 
-    # --- openings -----------------------------------------------------------
-    per_wall: dict[int, list[tuple[float, float, int]]] = {}
-    for k, op in enumerate(layout.openings):
-        path = f"openings[{k}]"
-        if op.wall >= n:
-            err(path, f"Wall index {op.wall} does not exist (room has {n} walls).")
-            continue
-        length = geo.wall_length(v, op.wall)
-        if op.offset + op.width > length + EPS:
-            err(path, f"Opening ({op.offset:.2f}+{op.width:.2f} m) does not fit on wall {op.wall} ({length:.2f} m).")
-        per_wall.setdefault(op.wall, []).append((op.offset, op.offset + op.width, k))
+    # --- things on walls: openings and ventilation units ----------------------
+    per_wall: dict[int, list[tuple[float, float, str]]] = {}
+    for kind, items in (("openings", layout.openings), ("vents", layout.vents)):
+        for k, item in enumerate(items):
+            path = f"{kind}[{k}]"
+            if item.wall >= n:
+                err(path, f"Wall index {item.wall} does not exist (room has {n} walls).")
+                continue
+            length = geo.wall_length(v, item.wall)
+            if item.offset + item.width > length + EPS:
+                err(path, f"Does not fit on wall {item.wall} ({item.offset:.2f}+{item.width:.2f} m > {length:.2f} m).")
+            per_wall.setdefault(item.wall, []).append((item.offset, item.offset + item.width, path))
     for w, spans in per_wall.items():
         spans.sort()
-        for (a0, a1, ka), (b0, b1, kb) in zip(spans, spans[1:]):
+        for (a0, a1, pa), (b0, b1, pb) in zip(spans, spans[1:]):
             if b0 < a1 - EPS:
-                err(f"openings[{kb}]", f"Overlaps openings[{ka}] on wall {w}.")
+                err(pb, f"Overlaps {pa} on wall {w}.")
 
-    inlets = [op for op in layout.openings if op.bc == "inlet"]
-    outlets = [op for op in layout.openings if op.bc == "outlet"]
-    if inlets and not outlets:
+    # --- things placed in the room ---------------------------------------------
+    placed = (("fans", layout.fans), ("showers", layout.showers), ("hobs", layout.hobs), ("extracts", layout.extracts))
+    if outline_ok:
+        for kind, items in placed:
+            for k, item in enumerate(items):
+                if not geo.point_in_polygon((item.x, item.y), v):
+                    err(f"{kind}[{k}]", f"{kind[:-1].capitalize()} is outside the room.")
+
+    # --- what drives the air? -------------------------------------------------
+    open_openings = [o for o in layout.openings if o.open]
+    # Paths for replacement air: open openings, and closed doors that keep a gap underneath.
+    air_paths = open_openings + [o for o in layout.openings if not o.open and o.kind == "door" and o.undercut != 0]
+    extract_flow = sum(e.flow_m3h for e in layout.extracts if e.on)
+    supply = sum(u.flow_m3h for u in layout.vents if u.on and u.mode == "supply")
+    exhaust = sum(u.flow_m3h for u in layout.vents if u.on and u.mode == "exhaust")
+    fans_on = any(f.on and f.speed > 0 for f in layout.fans)
+    wind = layout.conditions.wind_speed > 0 and any(o.connects_to == "outside" for o in open_openings)
+    if not (supply or exhaust or fans_on or extract_flow):
+        if len(open_openings) < 2:
+            warn(
+                "openings",
+                "Fewer than two open openings and no fans or ventilation units: no net flow. (Real single-sided "
+                "ventilation is driven by buoyancy and turbulence, which this 2D model does not have.)",
+            )
+        elif not wind:
+            warn("conditions", "No wind on an open window and no fans or ventilation units: the air stays at rest.")
+    if extract_flow and not air_paths and supply == 0:
         warn(
-            "openings",
-            "There are inlets but no outlet. Air is (nearly) incompressible, so whatever flows in must flow out "
-            "somewhere - the pressure equation has no solution without an outlet.",
+            "extracts",
+            "Extract fans/hoods run, but no air can come in (closed windows, doors without a gap, no supply unit). "
+            "In reality the fan only builds up under-pressure; the solver stops it. Open a window or give a door "
+            "an undercut.",
         )
-    if not inlets and not outlets:
-        warn("openings", "No open openings: the air stays at rest and heat/CO2 only spread by diffusion.")
-    if any(op.bc == "inlet" and op.velocity == 0 for op in inlets):
-        warn("openings", "An inlet has zero velocity; it behaves like a wall.")
+    for k, hob in enumerate(layout.hobs):
+        covered = any(
+            e.kind == "hood" and abs(hob.x - e.x) <= e.width / 2 + 0.1 and abs(hob.y - e.y) <= e.depth / 2 + 0.1
+            for e in layout.extracts
+        )
+        if not covered:
+            warn(f"hobs[{k}]", "No cooker hood above this hob: its steam and fumes all go into the room.")
+    if not air_paths and abs(supply - exhaust) > 1e-9:
+        warn(
+            "vents",
+            f"Ventilation is unbalanced (supply {supply:.0f} m³/h, exhaust {exhaust:.0f} m³/h) and no door or window is "
+            "open. In an airtight room that cannot work; the solver will balance it by scaling the exhaust "
+            "(or stop the units if one side is missing).",
+        )
 
     # --- people -------------------------------------------------------------
     if outline_ok:

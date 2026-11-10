@@ -1,0 +1,32 @@
+{
+  "schema_version": 3,
+  "name": "bathroom",
+  "room": {
+    "vertices": [[0, 0], [2.2, 0], [2.2, 2.6], [0, 2.6]],
+    "height": 2.5
+  },
+  "conditions": {
+    "initial_temperature": 22,
+    "initial_co2_ppm": 600,
+    "initial_rh": 55,
+    "outdoor_temperature": 5,
+    "outdoor_co2_ppm": 420,
+    "outdoor_rh": 85,
+    "wind_speed": 0,
+    "wind_direction": 270
+  },
+  "openings": [
+    { "id": "door", "kind": "door", "wall": 2, "offset": 0.6, "width": 0.8, "height": 2.0, "open": false, "undercut": 0.01, "connects_to": "indoors" },
+    { "id": "window", "kind": "window", "wall": 1, "offset": 1.4, "width": 0.6, "height": 0.6, "open": false, "connects_to": "outside" }
+  ],
+  "vents": [],
+  "fans": [],
+  "showers": [
+    { "id": "shower", "x": 0.5, "y": 0.5, "width": 0.9, "depth": 0.9, "moisture_gph": 2600, "heat_w": 800, "on": true }
+  ],
+  "hobs": [],
+  "extracts": [
+    { "id": "ceiling-fan", "kind": "ceiling", "x": 1.85, "y": 0.4, "width": 0.3, "depth": 0.3, "flow_m3h": 60, "on": true }
+  ],
+  "people": []
+}

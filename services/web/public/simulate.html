@@ -14,9 +14,9 @@
         <select id="layout-source" title="Which layout to simulate">
           <option value="">Layout from editor</option>
         </select>
-        <button id="btn-start" class="primary">Restart</button>
+        <button id="btn-start" class="primary" title="Start again from the layout (undoes live changes)">Restart</button>
         <button id="btn-pause">Pause</button>
-        <button id="btn-reset" title="Back to t = 0 (air at rest)">Reset</button>
+        <button id="btn-reset" title="Back to t = 0 (air at rest, initial temperature and CO₂), keeping live changes">Reset</button>
       </div>
       <label class="inline">Speed
         <select id="speed">
@@ -36,6 +36,7 @@
         <canvas id="field"></canvas>
         <canvas id="particles"></canvas>
         <div id="overlay-msg" class="overlay-msg" hidden></div>
+        <div class="stage-hint">Click doors, windows, units, fans, showers, hobs and extracts to switch them. Drag a fan's arrow tip to turn it.</div>
       </section>
 
       <aside class="sidebar">
@@ -44,6 +45,10 @@
           <div class="segmented" id="background">
             <label><input type="radio" name="bg" value="speed" checked /> Velocity</label>
             <label><input type="radio" name="bg" value="pressure" /> Pressure</label>
+            <label><input type="radio" name="bg" value="temperature" /> Temp.</label>
+            <label><input type="radio" name="bg" value="co2" /> CO₂</label>
+            <label><input type="radio" name="bg" value="rh" /> Humidity</label>
+            <label><input type="radio" name="bg" value="fumes" /> Fumes</label>
             <label><input type="radio" name="bg" value="none" /> None</label>
           </div>
           <div class="colorbar">
@@ -53,6 +58,28 @@
           <label class="check"><input id="show-particles" type="checkbox" checked /> Particles (flow lines)</label>
           <label class="check"><input id="show-streamlines" type="checkbox" /> Streamlines</label>
           <label class="check"><input id="show-vectors" type="checkbox" /> Velocity vectors</label>
+          <label class="check"><input id="show-flows" type="checkbox" checked /> Flow rates at openings</label>
+        </section>
+
+        <section class="card">
+          <h2>Live controls</h2>
+          <div id="controls"><p class="hint">Waiting for the simulation…</p></div>
+          <ul id="notes" class="issues"></ul>
+        </section>
+
+        <section class="card">
+          <h2>Room air</h2>
+          <dl id="air-stats" class="stats"></dl>
+        </section>
+
+        <section class="card" id="balance-card" hidden>
+          <h2>Moisture &amp; fumes balance</h2>
+          <dl id="balance" class="stats"></dl>
+        </section>
+
+        <section class="card">
+          <h2>Probe</h2>
+          <p id="probe" class="info">Hover over the room.</p>
         </section>
 
         <section class="card">
@@ -77,21 +104,33 @@
             </select>
             <small>m²/s</small>
           </label>
+          <label class="field">
+            <span>Mixing of heat, CO₂, steam, fumes</span>
+            <select id="kappa">
+              <option value="0.002">quiet (2e-3)</option>
+              <option value="0.01" selected>normal room (1e-2)</option>
+              <option value="0.03">strong plumes (3e-2)</option>
+              <option value="0.08">very strong (8e-2)</option>
+            </select>
+            <small>m²/s</small>
+          </label>
+          <p class="hint">
+            In a real room, hobs, showers and people drive a warm, rising circulation that mixes the air
+            within minutes. A top view has no buoyancy, so that mixing is set here as a turbulent diffusivity.
+          </p>
           <dl id="stats" class="stats"></dl>
-        </section>
-
-        <section class="card">
-          <h2>Probe</h2>
-          <p id="probe" class="info">Hover over the room.</p>
         </section>
 
         <section class="card">
           <h2>Things to try</h2>
           <ul class="tips">
+            <li>Close the door: the wind-driven cross flow stops at once, because the window alone has nothing to push against. The ventilation units keep running.</li>
+            <li>Turn the wind to 0° (from north): the window ends up on the leeward side, under suction, and the flow reverses.</li>
+            <li>CO₂: with everything closed it rises steadily. Compare the room mean with the <b>well-mixed steady state</b> C = C<sub>in</sub> + G/Q; that's what a ventilation engineer would compute by hand.</li>
+            <li>Bathroom: let the shower run, watch the humidity and the condensate grow, then switch the shower off and see how long the extract fan needs. Try the door open vs. closed (the 1 cm gap under it feeds the fan).</li>
+            <li>Kitchen: switch the hood off while frying potatoes and watch the fumes. With the hood on, see where its replacement air comes from - and how cold the kitchen gets in winter.</li>
+            <li>Temperature only goes along for the ride here: in a top view warm air cannot rise, so heat never drives the flow.</li>
             <li><b>max |div u|</b> is mass conservation after the pressure projection; it should stay near 1e-14.</li>
-            <li>Lower the viscosity: the inlet jet starts to flap and shed vortices. At the real value for air, what you see is mostly the scheme's own numerical diffusion.</li>
-            <li>Compare cell sizes 0.1 and 0.025: the finer grid resolves sharper jets but runs slower.</li>
-            <li>Pressure: the jet hitting a wall builds up pressure (stagnation), vortex cores are low-pressure spots, and the outlet is the 0 Pa reference.</li>
           </ul>
         </section>
       </aside>

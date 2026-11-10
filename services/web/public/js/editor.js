@@ -5,14 +5,39 @@ import * as M from './model.js';
 const HIT_PX = 8;
 const WALL_SNAP_PX = 18;
 
+export const TOOL_GROUPS = ['Room', 'Ventilation', 'Bathroom', 'Kitchen'];
+
 export const TOOLS = {
-  select: { label: 'Select', key: 'v', hint: 'Drag corners, walls, openings, people. Double-click a wall to add a corner.' },
-  rect: { label: 'Rectangle', key: 'r', hint: 'Drag to draw a rectangular room (replaces the outline).' },
-  polygon: { label: 'Polygon', key: 'p', hint: 'Click corners; click the first corner, double-click or press Enter to close. Esc cancels.' },
-  door: { label: 'Door', key: 'd', hint: 'Click on a wall to place a door.' },
-  window: { label: 'Window', key: 'w', hint: 'Click on a wall to place a window.' },
-  person: { label: 'Person', key: 'h', hint: 'Click inside the room to place a person.' },
+  select: { group: 'Room', label: 'Select', key: 'v', hint: 'Drag corners, walls and anything placed in the room. Double-click a wall to add a corner. Drag the round handle of a selected fan to turn it.' },
+  rect: { group: 'Room', label: 'Rectangle', key: 'r', hint: 'Drag to draw a rectangular room (replaces the outline).' },
+  polygon: { group: 'Room', label: 'Polygon', key: 'p', hint: 'Click corners; click the first corner, double-click or press Enter to close. Esc cancels.' },
+  door: { group: 'Room', label: 'Door', key: 'd', hint: 'Click on a wall to place a door.' },
+  window: { group: 'Room', label: 'Window', key: 'w', hint: 'Click on a wall to place a window.' },
+  person: { group: 'Room', label: 'Person', key: 'h', hint: 'Click inside the room to place a person.' },
+  vent: { group: 'Ventilation', label: 'Vent unit', key: 'u', hint: 'Click on a wall to place a ventilation unit (supply or exhaust).' },
+  fan: { group: 'Ventilation', label: 'Fan', key: 'n', hint: 'Click inside the room to place a free-standing fan. Select it and drag its round handle to turn it.' },
+  shower: { group: 'Bathroom', label: 'Shower', key: 's', hint: 'Click inside the room to place a shower (a source of steam and heat).' },
+  extract: { group: 'Bathroom', label: 'Extract fan', key: 'e', hint: 'Click to place a ceiling / wall extract fan, as in a bathroom.' },
+  hob: { group: 'Kitchen', label: 'Hob', key: 'k', hint: 'Click inside the room to place a hob. Choose what is cooking in the properties.' },
+  hood: { group: 'Kitchen', label: 'Cooker hood', key: 'o', hint: 'Click above a hob to place a cooker hood (or use "Add hood above" on a selected hob).' },
 };
+
+/** Things placed in the room that are axis-aligned rectangles, topmost first. */
+const RECT_TYPES = [['extract', 'extracts'], ['hob', 'hobs'], ['shower', 'showers']];
+const CREATE_IN_ROOM = {
+  fan: M.createFan,
+  shower: M.createShower,
+  hob: M.createHob,
+  extract: (x, y) => M.createExtract(x, y, 'ceiling'),
+  hood: (x, y) => M.createExtract(x, y, 'hood'),
+};
+const IN_ROOM_COLLECTION = { fan: 'fans', shower: 'showers', hob: 'hobs', extract: 'extracts', hood: 'extracts' };
+const SELECTION_TYPE = { hood: 'extract' }; // tool -> type of the object it creates, where they differ
+const FAN_HANDLE_PX = 9;
+
+const WALL_TOOLS = new Set(['door', 'window', 'vent']);
+/** The layout collection a selection type lives in. */
+const WALL_COLLECTION = { opening: 'openings', vent: 'vents' };
 
 export class Editor {
   constructor(canvas, store) {
@@ -62,7 +87,7 @@ export class Editor {
     const v = (name) => css.getPropertyValue(`--${name}`).trim();
     this.colors = Object.fromEntries(
       ['canvas-bg', 'grid-minor', 'grid-major', 'room-fill', 'wall', 'window', 'door', 'person', 'inlet', 'outlet',
-        'select', 'hover', 'text-muted', 'solid-cell', 'heat'].map((k) => [k, v(k)]),
+        'select', 'hover', 'text-muted', 'solid-cell', 'heat', 'vent', 'fan', 'shower', 'hob', 'extract'].map((k) => [k, v(k)]),
     );
     if (this.mesh) this.meshImage = this.buildMeshImage(this.mesh);
   }
@@ -137,14 +162,30 @@ export class Editor {
     const s = this.view.scale;
     const p = [sx, sy];
 
+    const sel = this.store.selection;
+    const selectedFan = sel?.type === 'fan' && M.findSelected(L, sel);
+    if (selectedFan && G.dist(p, this.fanHandle(selectedFan)) <= FAN_HANDLE_PX) return { type: 'fan-rotate', id: selectedFan.id };
+
     for (let k = L.people.length - 1; k >= 0; k--) {
       const person = L.people[k];
       if (G.dist(p, this.toScreen([person.x, person.y])) <= person.radius * s + 4) return { type: 'person', id: person.id };
     }
-    for (const op of L.openings) {
-      if (op.wall >= vs.length) continue;
-      const [a, b] = G.openingEnds(vs, op).map((q) => this.toScreen(q));
-      if (G.projectOnSegment(p, a, b).dist <= HIT_PX) return { type: 'opening', id: op.id };
+    const world = this.toWorld(sx, sy);
+    for (const [type, key] of RECT_TYPES) {
+      for (let k = L[key].length - 1; k >= 0; k--) {
+        if (M.inRect(L[key][k], world)) return { type, id: L[key][k].id };
+      }
+    }
+    for (let k = L.fans.length - 1; k >= 0; k--) {
+      const fan = L.fans[k];
+      if (G.dist(p, this.toScreen([fan.x, fan.y])) <= Math.max((fan.width / 2) * s, 8)) return { type: 'fan', id: fan.id };
+    }
+    for (const [type, key] of Object.entries(WALL_COLLECTION)) {
+      for (const item of L[key]) {
+        if (item.wall >= vs.length) continue;
+        const [a, b] = G.openingEnds(vs, item).map((q) => this.toScreen(q));
+        if (G.projectOnSegment(p, a, b).dist <= HIT_PX) return { type, id: item.id };
+      }
     }
     for (let i = 0; i < vs.length; i++) {
       if (G.dist(p, this.toScreen(vs[i])) <= HIT_PX) return { type: 'vertex', index: i };
@@ -165,7 +206,11 @@ export class Editor {
   // ---- input ----------------------------------------------------------------
 
   pointerDown(e) {
-    this.canvas.setPointerCapture(e.pointerId);
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      /* not a real pointer (e.g. a synthetic event): dragging still works inside the canvas */
+    }
     const sx = e.offsetX;
     const sy = e.offsetY;
     const world = this.toWorld(sx, sy);
@@ -180,15 +225,15 @@ export class Editor {
     switch (this.tool) {
       case 'select': {
         const hit = this.hitTest(sx, sy);
-        this.store.select(hit);
+        this.store.select(hit?.type === 'fan-rotate' ? { type: 'fan', id: hit.id } : hit);
         if (!hit) {
           this.drag = { kind: 'pan', sx, sy, ox: this.view.ox, oy: this.view.oy };
           return;
         }
         this.store.begin();
         this.drag = { kind: hit.type, hit, start: world, orig: structuredClone(L.room.vertices) };
-        if (hit.type === 'opening') {
-          const op = L.openings.find((o) => o.id === hit.id);
+        if (hit.type in WALL_COLLECTION) {
+          const op = M.findSelected(L, hit);
           const [a, b] = G.openingEnds(L.room.vertices, op);
           // Remember where on the opening we grabbed it, so it does not jump.
           this.drag.grab = G.dist(a, G.projectOnSegment(world, a, b).point);
@@ -213,17 +258,31 @@ export class Editor {
         break;
       }
       case 'door':
-      case 'window': {
+      case 'window':
+      case 'vent': {
         const nw = this.wallNear(world);
         if (!nw) break;
         const len = G.wallLength(L.room.vertices, nw.index);
         const center = G.snap(nw.t * len, this.snapStep / 2);
-        let op;
+        const type = this.tool === 'vent' ? 'vent' : 'opening';
+        let item;
         this.store.update((l) => {
-          op = M.createOpening(l, this.tool, nw.index, center);
-          l.openings.push(op);
+          item = M.createWallItem(l, this.tool, nw.index, center);
+          l[WALL_COLLECTION[type]].push(item);
         });
-        this.store.select({ type: 'opening', id: op.id });
+        this.store.select({ type, id: item.id });
+        break;
+      }
+      case 'fan':
+      case 'shower':
+      case 'hob':
+      case 'extract':
+      case 'hood': {
+        const p = this.snapped(world, e);
+        if (!G.pointInPolygon(p, L.room.vertices)) break;
+        const item = CREATE_IN_ROOM[this.tool](p[0], p[1]);
+        this.store.update((l) => l[IN_ROOM_COLLECTION[this.tool]].push(item));
+        this.store.select({ type: SELECTION_TYPE[this.tool] ?? this.tool, id: item.id });
         break;
       }
       case 'person': {
@@ -266,7 +325,7 @@ export class Editor {
       case 'vertex':
         this.store.live((l) => {
           l.room.vertices[d.hit.index] = p;
-          M.clampAllOpenings(l);
+          M.clampAllWallItems(l);
         });
         break;
       case 'wall':
@@ -280,24 +339,36 @@ export class Editor {
           for (const k of [i, j]) {
             l.room.vertices[k] = [+(d.orig[k][0] + n[0] * dn).toFixed(4), +(d.orig[k][1] + n[1] * dn).toFixed(4)];
           }
-          M.clampAllOpenings(l);
+          M.clampAllWallItems(l);
         });
         break;
       case 'opening':
+      case 'vent':
         this.store.live((l) => {
-          const op = l.openings.find((o) => o.id === d.hit.id);
+          const op = M.findSelected(l, d.hit);
           const nw = G.nearestWall(world, l.room.vertices);
           op.wall = nw.index;
           const along = nw.t * G.wallLength(l.room.vertices, nw.index);
           op.offset = e.altKey ? along - d.grab : G.snap(along - d.grab, this.snapStep / 2);
-          M.clampOpening(l.room.vertices, op);
+          M.clampWallItem(l.room.vertices, op);
           op.offset = +op.offset.toFixed(4);
         });
         break;
-      case 'person':
+      case 'fan-rotate':
         this.store.live((l) => {
-          const person = l.people.find((q) => q.id === d.hit.id);
-          [person.x, person.y] = p;
+          const fan = l.fans.find((f) => f.id === d.hit.id);
+          const deg = (Math.atan2(world[1] - fan.y, world[0] - fan.x) * 180) / Math.PI;
+          fan.angle = ((e.altKey ? Math.round(deg) : G.snap(deg, 15)) + 360) % 360; // Alt: 1° steps
+        });
+        break;
+      case 'person':
+      case 'fan':
+      case 'shower':
+      case 'hob':
+      case 'extract':
+        this.store.live((l) => {
+          const obj = M.findSelected(l, d.hit);
+          [obj.x, obj.y] = p;
         });
         break;
     }
@@ -395,7 +466,12 @@ export class Editor {
     ctx.stroke();
 
     for (const op of L.openings) if (op.wall < vs.length) this.drawOpening(op);
+    for (const vent of L.vents) if (vent.wall < vs.length) this.drawVent(vent);
     for (const person of L.people) this.drawPerson(person);
+    for (const shower of L.showers) this.drawShower(shower);
+    for (const hob of L.hobs) this.drawHob(hob);
+    for (const fan of L.fans) this.drawFan(fan);
+    for (const ex of L.extracts) this.drawExtract(ex);
     this.drawDimensions(vs);
     if (this.tool === 'select') this.drawVertices(vs);
     this.drawHighlight(this.hover, c.hover);
@@ -448,19 +524,18 @@ export class Editor {
       const n = parseInt(m[1], 16);
       return [(n >> 16) & 255, (n >> 8) & 255, n & 255, a];
     };
-    // Indexed by cell type: solid, fluid, inlet, outlet, closed opening.
-    const palette = {
-      0: rgba(this.colors['solid-cell'], 150),
-      1: [0, 0, 0, 0],
-      2: rgba(this.colors.inlet, 230),
-      3: rgba(this.colors.outlet, 230),
-      4: rgba(this.colors.window, 200),
-    };
+    const solid = rgba(this.colors['solid-cell'], 150);
+    const fluid = [0, 0, 0, 0];
     const heat = rgba(this.colors.heat, 170);
+    // Boundary cells are coloured by what they are: open opening, closed opening, ventilation unit.
+    const boundaryColor = mesh.boundaries.map((b) =>
+      b.type === 'vent' ? rgba(this.colors.vent, 230) : b.open ? rgba(this.colors.inlet, 230) : rgba(this.colors.window, 200),
+    );
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
         const k = j * nx + i;
-        const col = mesh.heat_source[k] > 0 ? heat : palette[mesh.cell_type[k]];
+        const t = mesh.cell_type[k];
+        const col = mesh.heat_source[k] > 0 ? heat : t === 1 ? fluid : t === 2 ? boundaryColor[mesh.boundary_id[k]] : solid;
         img.data.set(col, ((ny - 1 - j) * nx + i) * 4); // image rows go top-down
       }
     }
@@ -515,13 +590,20 @@ export class Editor {
     line(ctx, a, b);
 
     if (op.kind === 'window') {
+      // Frame lines; a closed window also shows its pane.
       ctx.strokeStyle = c.window;
       ctx.lineWidth = 1.5;
       for (const k of [-2.5, 2.5]) line(ctx, [a[0] + ns[0] * k, a[1] + ns[1] * k], [b[0] + ns[0] * k, b[1] + ns[1] * k]);
-      ctx.lineWidth = 1;
+      if (!op.open) {
+        ctx.lineWidth = 2.5;
+        line(ctx, a, b);
+      }
+    } else if (!op.open) {
+      ctx.strokeStyle = c.door;
+      ctx.lineWidth = 4;
       line(ctx, a, b);
     } else {
-      // Door leaf swinging into the room, hinged at the start.
+      // Open door: leaf swung into the room, hinged at the start.
       const r = op.width * s;
       const leaf = [a[0] - ns[0] * r, a[1] - ns[1] * r];
       ctx.strokeStyle = c.door;
@@ -537,13 +619,154 @@ export class Editor {
       ctx.setLineDash([]);
     }
 
-    if (op.bc !== 'closed') {
+    // Openings to the outside get a small tick on the outer side, to tell them from indoor doors.
+    if (op.connects_to === 'outside') {
       const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      const outside = [mid[0] + ns[0] * 16, mid[1] + ns[1] * 16];
-      const inside = [mid[0] - ns[0] * 16, mid[1] - ns[1] * 16];
-      if (op.bc === 'inlet') arrow(ctx, outside, inside, c.inlet);
-      else arrow(ctx, inside, outside, c.outlet);
+      ctx.strokeStyle = c['text-muted'];
+      ctx.lineWidth = 1;
+      line(ctx, [mid[0] + ns[0] * 6, mid[1] + ns[1] * 6], [mid[0] + ns[0] * 12, mid[1] + ns[1] * 12]);
     }
+  }
+
+  drawVent(vent) {
+    const { ctx } = this;
+    const c = this.colors;
+    const vs = this.store.layout.room.vertices;
+    const { n } = G.wallFrame(vs, vent.wall);
+    const [a, b] = G.openingEnds(vs, vent).map((q) => this.toScreen(q));
+    const ns = [n[0], -n[1]];
+    const color = vent.on ? c.vent : c['solid-cell'];
+    // A small box straddling the wall, with an arrow for the air direction.
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    for (const [q, k] of [[a, -5], [b, -5], [b, 5], [a, 5]]) ctx.lineTo(q[0] + ns[0] * k, q[1] + ns[1] * k);
+    ctx.closePath();
+    ctx.fill();
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const outside = [mid[0] + ns[0] * 6, mid[1] + ns[1] * 6];
+    const inside = [mid[0] - ns[0] * 22, mid[1] - ns[1] * 22];
+    if (vent.mode === 'supply') arrow(ctx, outside, inside, color);
+    else arrow(ctx, inside, outside, color);
+  }
+
+  pathRect(item) {
+    const { ctx } = this;
+    ctx.beginPath();
+    M.rectCorners(item).forEach((q, k) => {
+      const [x, y] = this.toScreen(q);
+      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.closePath();
+  }
+
+  drawShower(shower) {
+    const { ctx } = this;
+    const color = this.colors.shower;
+    this.pathRect(shower);
+    ctx.fillStyle = color + (shower.on ? '44' : '1a');
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // A few drops.
+    const [cx, cy] = this.toScreen([shower.x, shower.y]);
+    const r = Math.min(shower.width, shower.depth) * this.view.scale * 0.3;
+    ctx.fillStyle = color;
+    for (let k = 0; k < 6; k++) {
+      const a = (k * Math.PI) / 3;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  drawHob(hob) {
+    const { ctx } = this;
+    this.pathRect(hob);
+    ctx.fillStyle = this.colors.wall + 'cc';
+    ctx.fill();
+    // Four burners, glowing while it cooks.
+    const r = Math.min(hob.width, hob.depth) * 0.18 * this.view.scale;
+    ctx.strokeStyle = hob.on ? this.colors.hob : this.colors['solid-cell'];
+    ctx.lineWidth = 2;
+    for (const [fx, fy] of [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]]) {
+      const [x, y] = this.toScreen([hob.x + fx * hob.width, hob.y + fy * hob.depth]);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  drawExtract(ex) {
+    const { ctx } = this;
+    const color = ex.on ? this.colors.extract : this.colors['solid-cell'];
+    this.pathRect(ex);
+    ctx.setLineDash(ex.kind === 'hood' ? [6, 3] : []);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Crossed like a grille; a hood is drawn dashed because it hangs above the hob.
+    const [a, b, c, d] = M.rectCorners(ex).map((q) => this.toScreen(q));
+    ctx.lineWidth = 1;
+    line(ctx, a, c);
+    line(ctx, b, d);
+  }
+
+  drawFan(fan) {
+    const { ctx } = this;
+    const color = fan.on ? this.colors.fan : this.colors['solid-cell'];
+    const corners = M.fanCorners(fan).map((q) => this.toScreen(q));
+    ctx.beginPath();
+    corners.forEach((q, k) => (k ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])));
+    ctx.closePath();
+    ctx.fillStyle = color + '66';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Blowing direction, and the range it sweeps when it swings.
+    const from = this.toScreen([fan.x, fan.y]);
+    const len = this.fanArrowLength();
+    if (fan.oscillate) {
+      const a0 = -((fan.angle + fan.sweep) * Math.PI) / 180;
+      const a1 = -((fan.angle - fan.sweep) * Math.PI) / 180;
+      ctx.beginPath();
+      ctx.moveTo(from[0], from[1]);
+      ctx.arc(from[0], from[1], len, a0, a1);
+      ctx.closePath();
+      ctx.fillStyle = color + '22';
+      ctx.fill();
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const tip = this.fanHandle(fan);
+    arrow(ctx, from, tip, color);
+    const sel = this.store.selection;
+    if (sel?.type === 'fan' && sel.id === fan.id) {
+      // Rotation handle.
+      ctx.beginPath();
+      ctx.arc(tip[0], tip[1], 6, 0, Math.PI * 2);
+      ctx.fillStyle = this.colors['canvas-bg'];
+      ctx.fill();
+      ctx.strokeStyle = this.colors.select;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  fanArrowLength() {
+    return Math.max(0.5 * this.view.scale, 28);
+  }
+
+  /** Screen position of the tip of a fan's arrow - also its rotation handle. */
+  fanHandle(fan) {
+    const ang = (fan.angle * Math.PI) / 180;
+    const [x, y] = this.toScreen([fan.x, fan.y]);
+    const len = this.fanArrowLength();
+    return [x + Math.cos(ang) * len, y - Math.sin(ang) * len];
   }
 
   drawPerson(person) {
@@ -574,7 +797,7 @@ export class Editor {
       if (len * this.view.scale < 40) continue;
       const [mx, my] = this.toScreen([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
       const text = `${len.toFixed(2)} m`;
-      // Clear the wall and the inlet/outlet arrows, which stick out ~24 px.
+      // Clear the wall and the opening / unit markers.
       const off = 28 + (ctx.measureText(text).width / 2) * Math.abs(n[0]);
       ctx.fillText(text, mx + n[0] * off, my - n[1] * off);
     }
@@ -611,10 +834,24 @@ export class Editor {
         line(ctx, ...G.wallEnds(vs, sel.index).map((q) => this.toScreen(q)));
         break;
       case 'opening':
-        ctx.lineWidth = 9;
+      case 'vent':
+        ctx.lineWidth = 12;
         ctx.globalAlpha = 0.45;
         line(ctx, ...G.openingEnds(vs, obj).map((q) => this.toScreen(q)));
         ctx.globalAlpha = 1;
+        break;
+      case 'fan': {
+        const [x, y] = this.toScreen([obj.x, obj.y]);
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max((obj.width / 2) * this.view.scale, 8) + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      case 'shower':
+      case 'hob':
+      case 'extract':
+        this.pathRect({ ...obj, width: obj.width + 10 / this.view.scale, depth: obj.depth + 10 / this.view.scale });
+        ctx.stroke();
         break;
       case 'person': {
         const [x, y] = this.toScreen([obj.x, obj.y]);
@@ -666,17 +903,26 @@ export class Editor {
   drawToolPreview() {
     if (!this.mouse || this.drag) return;
     const { ctx } = this;
-    if (this.tool === 'door' || this.tool === 'window') {
+    if (WALL_TOOLS.has(this.tool)) {
       const nw = this.wallNear(this.mouse.world);
       if (!nw) return;
       const vs = this.store.layout.room.vertices;
       const len = G.wallLength(vs, nw.index);
-      const ghost = M.createOpening(this.store.layout, this.tool, nw.index, G.snap(nw.t * len, this.snapStep / 2));
-      ctx.strokeStyle = this.tool === 'door' ? this.colors.door : this.colors.window;
+      const ghost = M.createWallItem(this.store.layout, this.tool, nw.index, G.snap(nw.t * len, this.snapStep / 2));
+      ctx.strokeStyle = this.colors[this.tool];
       ctx.globalAlpha = 0.6;
       ctx.lineWidth = 8;
       line(ctx, ...G.openingEnds(vs, ghost).map((q) => this.toScreen(q)));
       ctx.globalAlpha = 1;
+    } else if (this.tool in CREATE_IN_ROOM) {
+      const p = this.mouse.snapped;
+      if (G.pointInPolygon(p, this.store.layout.room.vertices)) {
+        ctx.globalAlpha = 0.5;
+        const ghost = CREATE_IN_ROOM[this.tool](p[0], p[1]);
+        const draw = { fan: 'drawFan', shower: 'drawShower', hob: 'drawHob', extract: 'drawExtract', hood: 'drawExtract' }[this.tool];
+        this[draw](ghost);
+        ctx.globalAlpha = 1;
+      }
     } else if (this.tool === 'person') {
       const p = this.mouse.snapped;
       if (!G.pointInPolygon(p, this.store.layout.room.vertices)) return;

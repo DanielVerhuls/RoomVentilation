@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "l-shaped-office",
   "room": {
     "vertices": [[0, 0], [6, 0], [6, 2.5], [3.3, 2.5], [3.3, 4], [0, 4]],
@@ -9,12 +9,21 @@
     "initial_temperature": 21,
     "initial_co2_ppm": 600,
     "outdoor_temperature": 10,
-    "outdoor_co2_ppm": 420
+    "outdoor_co2_ppm": 420,
+    "wind_speed": 2,
+    "wind_direction": 180
   },
   "openings": [
-    { "id": "window-1", "kind": "window", "wall": 0, "offset": 2.0, "width": 1.2, "bc": "inlet", "velocity": 0.5 },
-    { "id": "window-2", "kind": "window", "wall": 1, "offset": 0.6, "width": 1.0, "bc": "closed", "velocity": 0.5 },
-    { "id": "door-1", "kind": "door", "wall": 4, "offset": 0.5, "width": 0.9, "bc": "outlet", "velocity": 0.5 }
+    { "id": "window-1", "kind": "window", "wall": 0, "offset": 2.0, "width": 1.2, "open": true, "connects_to": "outside" },
+    { "id": "window-2", "kind": "window", "wall": 1, "offset": 0.6, "width": 1.0, "open": false, "connects_to": "outside" },
+    { "id": "door-1", "kind": "door", "wall": 4, "offset": 0.5, "width": 0.9, "open": true, "connects_to": "indoors" }
+  ],
+  "vents": [
+    { "id": "vent-supply", "wall": 5, "offset": 1.2, "width": 0.3, "mode": "supply", "flow_m3h": 120, "supply_temperature": 18, "on": true },
+    { "id": "vent-exhaust", "wall": 2, "offset": 1.0, "width": 0.3, "mode": "exhaust", "flow_m3h": 120, "supply_temperature": 18, "on": true }
+  ],
+  "fans": [
+    { "id": "fan-1", "x": 4.8, "y": 1.6, "angle": 200, "width": 0.4, "speed": 2.5, "on": false }
   ],
   "people": [
     { "id": "person-1", "x": 1.5, "y": 1.5, "radius": 0.25, "activity": "seated", "co2_lps": 0.005, "heat_w": 100 },

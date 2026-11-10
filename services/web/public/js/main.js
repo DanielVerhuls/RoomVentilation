@@ -1,6 +1,6 @@
 // Wires the editor, panel, API and toolbar together.
 import { api } from './api.js';
-import { Editor, TOOLS } from './editor.js';
+import { Editor, TOOL_GROUPS, TOOLS } from './editor.js';
 import * as M from './model.js';
 import { Panel } from './panel.js';
 import { Store } from './store.js';
@@ -14,16 +14,27 @@ new Panel($('panel'), store, editor);
 
 // ---- tools ---------------------------------------------------------------------
 
-for (const [name, t] of Object.entries(TOOLS)) {
-  const b = document.createElement('button');
-  b.dataset.tool = name;
-  b.title = t.hint;
-  b.innerHTML = `<span>${t.label}</span><kbd>${t.key.toUpperCase()}</kbd>`;
-  b.addEventListener('click', () => editor.setTool(name));
-  $('tools').append(b);
+// Tools grouped by room type; each group can be folded away.
+for (const group of TOOL_GROUPS) {
+  const box = document.createElement('details');
+  box.className = 'tool-group';
+  box.open = true;
+  const summary = document.createElement('summary');
+  summary.textContent = group;
+  box.append(summary);
+  for (const [name, t] of Object.entries(TOOLS)) {
+    if (t.group !== group) continue;
+    const b = document.createElement('button');
+    b.dataset.tool = name;
+    b.title = t.hint;
+    b.innerHTML = `<span>${t.label}</span><kbd>${t.key.toUpperCase()}</kbd>`;
+    b.addEventListener('click', () => editor.setTool(name));
+    box.append(b);
+  }
+  $('tools').append(box);
 }
 editor.onToolChange = (tool) => {
-  for (const b of $('tools').children) b.classList.toggle('active', b.dataset.tool === tool);
+  for (const b of $('tools').querySelectorAll('button[data-tool]')) b.classList.toggle('active', b.dataset.tool === tool);
   $('tool-hint').textContent = TOOLS[tool].hint;
 };
 editor.setTool('select');
@@ -131,12 +142,13 @@ function renderIssues(issues) {
 }
 
 function issueTarget(path) {
-  const m = /^(openings|people|room\.vertices)[[.](\d+)/.exec(path ?? '');
+  const m = /^(openings|vents|fans|showers|hobs|extracts|people|room\.vertices)[[.](\d+)/.exec(path ?? '');
   if (!m) return null;
   const k = +m[2];
   if (m[1] === 'room.vertices') return { type: 'vertex', index: k };
   const item = store.layout[m[1]][k];
-  return item ? { type: m[1] === 'people' ? 'person' : 'opening', id: item.id } : null;
+  const types = { openings: 'opening', vents: 'vent', fans: 'fan', showers: 'shower', hobs: 'hob', extracts: 'extract', people: 'person' };
+  return item ? { type: types[m[1]], id: item.id } : null;
 }
 
 let meshSeq = 0;
@@ -175,7 +187,7 @@ store.subscribe((kind) => {
 function loadAutosave() {
   try {
     const raw = localStorage.getItem(AUTOSAVE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    return raw ? M.migrate(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
@@ -276,7 +288,7 @@ $('file-input').addEventListener('change', async (e) => {
   try {
     const layout = JSON.parse(await file.text());
     if (!layout?.room?.vertices) throw new Error('not a layout file');
-    loadLayout({ openings: [], people: [], ...layout });
+    loadLayout(M.migrate(layout));
     message(`Imported ${file.name}`);
   } catch (err) {
     message(`Import failed: ${err.message}`, true);
